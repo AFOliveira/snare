@@ -11,7 +11,14 @@
 //! `static F: unsafe extern "C" fn(..) = libc::fstat`) is not a GOT slot: in a PIE or DSO the
 //! linker leaves an absolute word relocation against the symbol (`R_X86_64_64`, x86-64 psABI
 //! table "Relocation Types"; `R_AARCH64_ABS64`, AArch64 ELF ABI §5.7.2 "Static Data
-//! Relocations") in `.data.rel.ro` or `.data`, and those words are rewritten too. A non-PIE
+//! Relocations"; `R_RISCV_64`, RISC-V ELF psABI "Relocations") in `.data.rel.ro` or `.data`, and
+//! those words are rewritten too.
+//!
+//! RISC-V has no `GLOB_DAT`: a GOT slot that holds a symbol's address carries the same
+//! `R_RISCV_64` as a data word, so there it is rewritten under the data words' checks (below),
+//! which such a slot passes (addend 0, an aligned word in a writable segment, holding the address
+//! the loader bound). Calls go through the PLT, `R_RISCV_JUMP_SLOT`, as rustc emits them for
+//! riscv64 (unlike x86_64, its target does not disable `plt_by_default`). A non-PIE
 //! executable has no such relocation: the linker points the word at a canonical PLT entry, whose
 //! `JUMP_SLOT` is rewritten like any other.
 //!
@@ -53,7 +60,8 @@ const DT_RELASZ: i64 = 8;
 /// `Elf64_Rela` (`DT_PLTREL == DT_RELA`): the x86-64 psABI ("Relocation") says the architecture
 /// uses only `Elf64_Rela`, and glibc's dynamic linker for both x86_64 and AArch64 takes
 /// `sysdeps/generic/dl-machine-rel.h`, which sets `ELF_MACHINE_NO_REL` and `PLTREL` to
-/// `Elf64_Rela`.
+/// `Elf64_Rela`. RISC-V's dynamic relocations are `Elf64_Rela` too (RISC-V ELF psABI,
+/// "Relocations"), with `DT_PLTREL == DT_RELA`.
 const DT_JMPREL: i64 = 23;
 
 /// The relocation types whose target is a GOT slot holding a symbol's address:
@@ -63,6 +71,10 @@ const GOT_RELOCATIONS: [u32; 2] = [6, 7];
 /// `R_AARCH64_GLOB_DAT` (1025) and `R_AARCH64_JUMP_SLOT` (1026), glibc `elf/elf.h`.
 #[cfg(target_arch = "aarch64")]
 const GOT_RELOCATIONS: [u32; 2] = [1025, 1026];
+/// `R_RISCV_JUMP_SLOT` (5), glibc `elf/elf.h`. RISC-V's other GOT slots carry `R_RISCV_64`, the
+/// [`DATA_RELOCATION`] (see the module documentation).
+#[cfg(target_arch = "riscv64")]
+const GOT_RELOCATIONS: [u32; 1] = [5];
 
 /// The absolute 64-bit data relocations, whose slot holds `S + A`: `R_X86_64_64` (1), glibc
 /// `elf/elf.h`.
@@ -71,6 +83,9 @@ const DATA_RELOCATION: u32 = 1;
 /// `R_AARCH64_ABS64` (257), glibc `elf/elf.h`.
 #[cfg(target_arch = "aarch64")]
 const DATA_RELOCATION: u32 = 257;
+/// `R_RISCV_64` (2), glibc `elf/elf.h`.
+#[cfg(target_arch = "riscv64")]
+const DATA_RELOCATION: u32 = 2;
 
 /// Writable-segment flag of a program header (glibc `elf/elf.h`, `PF_W`).
 const PF_W: u32 = 2;
@@ -132,6 +147,10 @@ pub(super) fn resolve(hook: &Hook) -> usize {
     const BASE: &std::ffi::CStr = c"GLIBC_2.2.5";
     #[cfg(target_arch = "aarch64")]
     const BASE: &std::ffi::CStr = c"GLIBC_2.17";
+    // riscv64 glibc starts at 2.27 and exports the `__xstat` family there as default versions, so
+    // `dlsym` finds them and this fallback is not reached for them.
+    #[cfg(target_arch = "riscv64")]
+    const BASE: &std::ffi::CStr = c"GLIBC_2.27";
     // SAFETY: both strings are NUL-terminated; as above, this is the real dlvsym.
     unsafe { libc::dlvsym(libc::RTLD_DEFAULT, name.as_ptr().cast(), BASE.as_ptr()) as usize }
 }
@@ -248,9 +267,9 @@ unsafe extern "C" fn collect(
 /// `object` that names a resolved hook, and returns the hooks patched and the names of every
 /// other symbol those relocations import.
 ///
-/// Only `DT_RELA` and `DT_JMPREL` are read. `DT_REL` is never emitted on x86_64 or AArch64 (see
-/// [`DT_JMPREL`]), and `DT_RELR` packs only relative relocations, which name no symbol (gABI
-/// "Dynamic Section", `DT_RELR`).
+/// Only `DT_RELA` and `DT_JMPREL` are read. `DT_REL` is never emitted on x86_64, AArch64 or
+/// RISC-V (see [`DT_JMPREL`]), and `DT_RELR` packs only relative relocations, which name no
+/// symbol (gABI "Dynamic Section", `DT_RELR`).
 ///
 /// An object without a dynamic section, or without symbol or string tables, imports nothing and
 /// is skipped. A slot already holding the replacement is left alone and not reported again.

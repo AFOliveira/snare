@@ -52,15 +52,20 @@
     all(
         target_os = "linux",
         target_env = "gnu",
-        any(target_arch = "x86_64", target_arch = "aarch64")
+        any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "riscv64"
+        )
     ),
     target_os = "macos",
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64"))
 )))]
 compile_error!(
-    "snare supports only x86_64/aarch64 Linux (glibc), macOS, and x86_64/aarch64 Windows; \
+    "snare supports only x86_64/aarch64/riscv64 Linux (glibc), macOS, and x86_64/aarch64 Windows; \
      gate the dependency on `cfg(any(all(target_os = \"linux\", target_env = \"gnu\", \
-     any(target_arch = \"x86_64\", target_arch = \"aarch64\")), target_os = \"macos\", windows))`"
+     any(target_arch = \"x86_64\", target_arch = \"aarch64\", target_arch = \"riscv64\")), \
+     target_os = \"macos\", windows))`"
 );
 
 mod ancillary;
